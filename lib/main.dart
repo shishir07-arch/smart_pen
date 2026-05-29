@@ -149,32 +149,34 @@ static Map<String, dynamic> analyse(
     const n = 32;
 
     final userResampled = resample(userStroke, n);
-    final templateResampled = resample(templateStroke, n);
+    var templateResampled = resample(templateStroke, n);
 
-    // position-aware score — compare WITHOUT normalising first
-    // this catches drawing in wrong location
+    // for circular strokes (O, C) rotate template to match user start point
+    templateResampled = _alignStartPoint(userResampled, templateResampled);
+
+    final userLength = pathLength(userStroke);
+    final templateLength = pathLength(templateStroke);
+
+    // position aware score
     double positionCost = 0;
     for (int i = 0; i < n; i++) {
       positionCost += (userResampled[i] - templateResampled[i]).distance;
     }
-    // normalise position cost by canvas diagonal (~1000px typically)
-    final positionScore = (positionCost / (n * 500)).clamp(0.0, 1.0);
+    final positionScore = (positionCost / (n * templateLength * 0.8)).clamp(0.0, 1.0);
 
-    // shape score — normalised, catches wrong shape regardless of position
+    // shape score
     final userNorm = normalise(userResampled);
     final templateNorm = normalise(templateResampled);
     final rawShape = compute(userNorm, templateNorm);
     final shapeScore = (rawShape / 2.0).clamp(0.0, 1.0);
 
-    // combined score — weight position more
-    final score = (positionScore * 0.6 + shapeScore * 0.4);
+    // for circular letters rely more on shape, less on position
+    // position matters more for L which has a fixed start
+    final score = (positionScore * 0.3 + shapeScore * 0.7);
 
-    // coverage check — did user actually draw enough points?
-    final userLength = pathLength(userStroke);
-    final templateLength = pathLength(templateStroke);
+    
     final coverageRatio = userLength / templateLength;
 
-    // find which third had most deviation
     final third = n ~/ 3;
     double startCost = 0, midCost = 0, endCost = 0;
     for (int i = 0; i < third; i++) {
@@ -190,9 +192,7 @@ static Map<String, dynamic> analyse(
     String segment = 'middle';
     if (startCost >= midCost && startCost >= endCost) segment = 'start';
     if (endCost >= midCost && endCost >= startCost) segment = 'end';
-
-    // override segment if coverage is too low — they drew too little
-    if (coverageRatio < 0.6) segment = 'incomplete';
+    if (coverageRatio < 0.3) segment = 'incomplete';
 
     return {
       'score': score,
@@ -201,6 +201,30 @@ static Map<String, dynamic> analyse(
       'positionScore': positionScore,
       'shapeScore': shapeScore,
     };
+  }
+
+  // rotate template points so the closest point to user's start becomes index 0
+ static List<Offset> _alignStartPoint(
+      List<Offset> user, List<Offset> template) {
+    final userNorm = normalise(user);
+    double minCost = double.infinity;
+    int bestIndex = 0;
+
+    for (int i = 0; i < template.length; i++) {
+      final rotated = [...template.sublist(i), ...template.sublist(0, i)];
+      final rotatedNorm = normalise(rotated);
+      double cost = 0;
+      for (int j = 0; j < template.length; j++) {
+        cost += (userNorm[j] - rotatedNorm[j]).distance;
+      }
+      if (cost < minCost) {
+        minCost = cost;
+        bestIndex = i;
+      }
+    }
+
+    if (bestIndex == 0) return template;
+    return [...template.sublist(bestIndex), ...template.sublist(0, bestIndex)];
   }
 
   static double pathLength(List<Offset> points) {
@@ -212,8 +236,11 @@ static Map<String, dynamic> analyse(
   }
 
   static String getTip(String segment, String letter, double coverage) {
-    if (coverage < 0.5) {
+    if (coverage < 0.3) {
       return 'Keep going — trace the full letter shape';
+    }
+    if (letter == 'O' || letter == 'C') {
+      return 'Try to stay on the blue guide as you go around';
     }
     switch (segment) {
       case 'start':
@@ -243,6 +270,7 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
   String? _feedback;
   bool _isSuccess = false;
   double _lastScore = -1;
+  bool _showStars = false;
 
   void _onPanStart(DragStartDetails details) {
     setState(() {
@@ -297,13 +325,14 @@ void _analyseStroke() {
     }
 
     final result = DTW.analyse(_strokes.last, scaledTemplate);
+    print('position: ${result['positionScore']}, shape: ${result['shapeScore']}, coverage: ${result['coverage']}, segment: ${result['segment']}');
     final score = result['score'] as double;
     final segment = result['segment'] as String;
     final coverage = result['coverage'] as double;
 
-    if (score < 0.15) {
+    if (score < 0.28) {
       print('MOCK BLE: sending H3 (success)');
-    } else if (score < 0.4) {
+    } else if (score < 0.55) {
       print('MOCK BLE: sending H1 (minor correction)');
     } else {
       print('MOCK BLE: sending H2 (major error)');
@@ -311,9 +340,13 @@ void _analyseStroke() {
 
     setState(() {
       _lastScore = score;
-      if (score < 0.15) {
+      if (score < 0.28) {
         _isSuccess = true;
-        _feedback = '⭐ Perfect! Great job!';
+        _showStars = true;
+        _feedback = score < 0.20 ? '⭐ Perfect! Great job!' : '👍 Good job! Keep practising!';
+      } else if (score < 0.55) {
+        _isSuccess = false;
+        _feedback = 'Almost there — try to stay closer to the blue guide';
       } else {
         _isSuccess = false;
         _feedback = DTW.getTip(segment, _currentLetter, coverage);
@@ -426,7 +459,8 @@ void _analyseStroke() {
             ),
           ),
 
-          // feedback popup at bottom
+          
+            // feedback popup at bottom
           if (_feedback != null)
             Positioned(
               bottom: 20,
@@ -460,6 +494,18 @@ void _analyseStroke() {
                           : Colors.orange.shade800,
                     ),
                   ),
+                ),
+              ),
+            ),
+
+          // star burst animation on success
+          if (_isSuccess && _showStars)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: StarBurstWidget(
+                  onComplete: () {
+                    setState(() => _showStars = false);
+                  },
                 ),
               ),
             ),
@@ -540,4 +586,96 @@ class CanvasPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(CanvasPainter oldDelegate) => true;
+}
+
+// ── Star Burst Animation ──────────────────────────────────────────
+class StarBurstWidget extends StatefulWidget {
+  final VoidCallback onComplete;
+  const StarBurstWidget({super.key, required this.onComplete});
+
+  @override
+  State<StarBurstWidget> createState() => _StarBurstWidgetState();
+}
+
+class _StarBurstWidgetState extends State<StarBurstWidget>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late List<_Star> _stars;
+  final Random _random = Random();
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1500),
+    );
+
+    _stars = List.generate(20, (i) => _Star(
+      x: 0.2 + _random.nextDouble() * 0.6,
+      y: 0.1 + _random.nextDouble() * 0.7,
+      size: 20 + _random.nextDouble() * 30,
+      delay: _random.nextDouble() * 0.4,
+      color: [
+        Colors.amber,
+        Colors.orange,
+        Colors.yellow,
+        Colors.deepOrange,
+        Colors.purple,
+      ][_random.nextInt(5)],
+    ));
+
+    _controller.forward().then((_) => widget.onComplete());
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Stack(
+          children: _stars.map((star) {
+            final progress = ((_controller.value - star.delay) / (1 - star.delay))
+                .clamp(0.0, 1.0);
+            final opacity = progress < 0.7 ? progress / 0.7 : (1 - progress) / 0.3;
+            final scale = 0.5 + progress * 1.5;
+            final yOffset = -progress * 80;
+
+            return Positioned(
+              left: MediaQuery.of(context).size.width * star.x,
+              top: MediaQuery.of(context).size.height * star.y + yOffset,
+              child: Opacity(
+                opacity: opacity.clamp(0.0, 1.0),
+                child: Transform.scale(
+                  scale: scale,
+                  child: Text(
+                    '⭐',
+                    style: TextStyle(fontSize: star.size, color: star.color),
+                  ),
+                ),
+              ),
+            );
+          }).toList(),
+        );
+      },
+    );
+  }
+}
+
+class _Star {
+  final double x, y, size, delay;
+  final Color color;
+  _Star({
+    required this.x,
+    required this.y,
+    required this.size,
+    required this.delay,
+    required this.color,
+  });
 }
