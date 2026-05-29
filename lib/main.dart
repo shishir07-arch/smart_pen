@@ -266,11 +266,25 @@ class PracticeCanvas extends StatefulWidget {
 class _PracticeCanvasState extends State<PracticeCanvas> {
   final List<List<Offset>> _strokes = [];
   List<Offset> _currentStroke = [];
-  String _currentLetter = 'O';
+  
+  // session config
+  final List<String> _sessionLetters = ['O', 'C', 'L'];
+  int _currentLetterIndex = 0;
+  String get _currentLetter => _sessionLetters[_currentLetterIndex];
+
+  // per letter tracking
+  int _attemptCount = 0;
+  int _failCount = 0;
+  bool _tracingMode = false;
+
+  // feedback
   String? _feedback;
   bool _isSuccess = false;
-  double _lastScore = -1;
   bool _showStars = false;
+  double _lastScore = -1;
+
+  // session results — letter -> best score
+  final Map<String, double> _sessionResults = {};
 
   void _onPanStart(DragStartDetails details) {
     setState(() {
@@ -297,7 +311,7 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
     _analyseStroke();
   }
 
-void _analyseStroke() {
+  void _analyseStroke() {
     final template = LetterTemplates.templates[_currentLetter];
     if (template == null) return;
 
@@ -309,7 +323,26 @@ void _analyseStroke() {
         .map((p) => Offset(offsetX + p.dx * minDim, offsetY + p.dy * minDim))
         .toList();
 
-    // minimum stroke length check — must be at least 15% of template length
+    // bounding box check
+    final xs = _strokes.last.map((p) => p.dx).toList();
+    final ys = _strokes.last.map((p) => p.dy).toList();
+    final bWidth = xs.reduce(max) - xs.reduce(min);
+    final bHeight = ys.reduce(max) - ys.reduce(min);
+    final minDimension = minDim * 0.15;
+
+    if (bWidth < minDimension || bHeight < minDimension) {
+      setState(() {
+        _feedback = 'Try drawing bigger — fill the blue guide';
+        _isSuccess = false;
+        _lastScore = 0;
+      });
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _feedback = null);
+      });
+      return;
+    }
+
+    // minimum stroke length check
     final userLength = DTW.pathLength(_strokes.last);
     final templateLength = DTW.pathLength(scaledTemplate);
     if (userLength < templateLength * 0.15) {
@@ -325,37 +358,89 @@ void _analyseStroke() {
     }
 
     final result = DTW.analyse(_strokes.last, scaledTemplate);
-    print('position: ${result['positionScore']}, shape: ${result['shapeScore']}, coverage: ${result['coverage']}, segment: ${result['segment']}');
     final score = result['score'] as double;
     final segment = result['segment'] as String;
     final coverage = result['coverage'] as double;
 
+    print('position: ${result['positionScore']}, shape: ${result['shapeScore']}, coverage: $coverage, segment: $segment');
+
+    _attemptCount++;
+
+    // update best score for this letter
+    final prev = _sessionResults[_currentLetter] ?? 1.0;
+    _sessionResults[_currentLetter] = min(prev, score);
+
     if (score < 0.28) {
       print('MOCK BLE: sending H3 (success)');
-    } else if (score < 0.55) {
-      print('MOCK BLE: sending H1 (minor correction)');
-    } else {
-      print('MOCK BLE: sending H2 (major error)');
-    }
-
-    setState(() {
-      _lastScore = score;
-      if (score < 0.28) {
+      setState(() {
+        _lastScore = score;
         _isSuccess = true;
         _showStars = true;
-        _feedback = score < 0.20 ? '⭐ Perfect! Great job!' : '👍 Good job! Keep practising!';
-      } else if (score < 0.55) {
-        _isSuccess = false;
-        _feedback = 'Almost there — try to stay closer to the blue guide';
+        _feedback = score < 0.15 ? '⭐ Perfect! Great job!' : '👍 Good job! Keep practising!';
+        _failCount = 0;
+      });
+      // move to next letter after 2 seconds
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) _nextLetter();
+      });
+    } else {
+      _failCount++;
+      if (score < 0.35) {
+        print('MOCK BLE: sending H1 (minor correction)');
       } else {
-        _isSuccess = false;
-        _feedback = DTW.getTip(segment, _currentLetter, coverage);
+        print('MOCK BLE: sending H2 (major error)');
       }
-    });
 
-    Future.delayed(const Duration(seconds: 3), () {
-      if (mounted) setState(() => _feedback = null);
-    });
+      // after 3 fails drop to tracing mode
+      if (_failCount >= 3 && !_tracingMode) {
+        setState(() {
+          _tracingMode = true;
+          _feedback = 'No worries — just trace over the blue letter';
+          _isSuccess = false;
+          _lastScore = score;
+        });
+      } else {
+        setState(() {
+          _lastScore = score;
+          _isSuccess = false;
+          _feedback = _tracingMode
+              ? 'Keep tracing — follow the blue guide'
+              : DTW.getTip(segment, _currentLetter, coverage);
+        });
+      }
+
+      Future.delayed(const Duration(seconds: 3), () {
+        if (mounted) setState(() => _feedback = null);
+      });
+    }
+  }
+
+  void _nextLetter() {
+    if (_currentLetterIndex >= _sessionLetters.length - 1) {
+      // session complete — go to summary
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SessionSummaryScreen(
+            results: _sessionResults,
+            letters: _sessionLetters,
+          ),
+        ),
+      );
+    } else {
+      setState(() {
+        _currentLetterIndex++;
+        _strokes.clear();
+        _currentStroke = [];
+        _feedback = null;
+        _isSuccess = false;
+        _showStars = false;
+        _lastScore = -1;
+        _attemptCount = 0;
+        _failCount = 0;
+        _tracingMode = false;
+      });
+    }
   }
 
   void _clearCanvas() {
@@ -364,7 +449,8 @@ void _analyseStroke() {
       _currentStroke = [];
       _feedback = null;
       _isSuccess = false;
-      _lastScore = -1; // -1 means no score yet
+      _showStars = false;
+      _lastScore = -1;
     });
   }
 
@@ -373,7 +459,9 @@ void _analyseStroke() {
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
-        title: Text('Trace the letter: $_currentLetter'),
+        title: Text(_tracingMode
+            ? 'Tracing mode: $_currentLetter'
+            : 'Trace the letter: $_currentLetter'),
         actions: [
           IconButton(
             icon: const Icon(Icons.clear),
@@ -382,133 +470,179 @@ void _analyseStroke() {
           )
         ],
       ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(8.0),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: ['O', 'L', 'C'].map((letter) {
-            return ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: _currentLetter == letter
-                    ? Colors.deepPurple
-                    : Colors.grey[200],
-              ),
-              onPressed: () {
-                setState(() {
-                  _currentLetter = letter;
-                  _strokes.clear();
-                  _feedback = null;
-                });
-              },
-              child: Text(
-                letter,
-                style: TextStyle(
-                  color: _currentLetter == letter
-                      ? Colors.white
-                      : Colors.black,
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            );
-          }).toList(),
-        ),
-      ),
-      body: Stack(
+      // progress indicator at top
+      body: Column(
         children: [
-          // drawing canvas
-          GestureDetector(
-            onPanStart: _onPanStart,
-            onPanUpdate: _onPanUpdate,
-            onPanEnd: _onPanEnd,
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                return CustomPaint(
-                  painter: CanvasPainter(
-                    strokes: _strokes,
-                    currentStroke: _currentStroke,
-                    templatePoints:
-                        LetterTemplates.templates[_currentLetter] ?? [],
-                    canvasSize:
-                        Size(constraints.maxWidth, constraints.maxHeight),
-                  ),
+          // letter progress bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: Row(
+              children: _sessionLetters.asMap().entries.map((entry) {
+                final i = entry.key;
+                final letter = entry.value;
+                final isDone = i < _currentLetterIndex;
+                final isCurrent = i == _currentLetterIndex;
+                return Expanded(
                   child: Container(
-                    width: double.infinity,
-                    height: double.infinity,
-                    color: Colors.transparent,
+                    margin: const EdgeInsets.symmetric(horizontal: 4),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: isDone
+                          ? Colors.green.shade300
+                          : isCurrent
+                              ? Colors.deepPurple.shade200
+                              : Colors.grey.shade200,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      letter,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.bold,
+                        color: isDone || isCurrent
+                            ? Colors.white
+                            : Colors.grey.shade600,
+                      ),
+                    ),
                   ),
                 );
-              },
+              }).toList(),
             ),
           ),
 
-          // score indicator top right
-          Positioned(
-            top: 10,
-            right: 10,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.1),
-                borderRadius: BorderRadius.circular(12),
-              ),
+          // tracing mode banner
+          if (_tracingMode)
+            Container(
+              width: double.infinity,
+              color: Colors.orange.shade100,
+              padding: const EdgeInsets.symmetric(vertical: 6),
               child: Text(
-                _lastScore < 0 ? 'Score: —' : 'Score: ${(100 - _lastScore * 100).toStringAsFixed(0)}%',
-                style: const TextStyle(fontSize: 14),
+                'Tracing mode — just follow the blue guide',
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.orange.shade800, fontSize: 13),
               ),
+            ),
+
+          // canvas
+          Expanded(
+            child: Stack(
+              children: [
+                GestureDetector(
+                  onPanStart: _onPanStart,
+                  onPanUpdate: _onPanUpdate,
+                  onPanEnd: _onPanEnd,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      return CustomPaint(
+                        painter: CanvasPainter(
+                          strokes: _strokes,
+                          currentStroke: _currentStroke,
+                          templatePoints:
+                              LetterTemplates.templates[_currentLetter] ?? [],
+                          canvasSize: Size(
+                              constraints.maxWidth, constraints.maxHeight),
+                          tracingMode: _tracingMode,
+                        ),
+                        child: Container(
+                          width: double.infinity,
+                          height: double.infinity,
+                          color: Colors.transparent,
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
+                // score
+                Positioned(
+                  top: 10,
+                  right: 10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      _lastScore < 0
+                          ? 'Score: —'
+                          : 'Score: ${(100 - _lastScore * 100).toStringAsFixed(0)}%',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ),
+                ),
+
+                // attempt counter
+                Positioned(
+                  top: 10,
+                  left: 10,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      'Attempt: $_attemptCount',
+                      style: const TextStyle(fontSize: 14),
+                    ),
+                  ),
+                ),
+
+                // feedback popup
+                if (_feedback != null)
+                  Positioned(
+                    bottom: 20,
+                    left: 20,
+                    right: 20,
+                    child: AnimatedOpacity(
+                      opacity: _feedback != null ? 1.0 : 0.0,
+                      duration: const Duration(milliseconds: 300),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 20, vertical: 14),
+                        decoration: BoxDecoration(
+                          color: _isSuccess
+                              ? Colors.green.shade100
+                              : Colors.orange.shade100,
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(
+                            color: _isSuccess
+                                ? Colors.green.shade300
+                                : Colors.orange.shade300,
+                          ),
+                        ),
+                        child: Text(
+                          _feedback!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: _isSuccess
+                                ? Colors.green.shade800
+                                : Colors.orange.shade800,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+
+                // star burst
+                if (_isSuccess && _showStars)
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: StarBurstWidget(
+                        onComplete: () {
+                          setState(() => _showStars = false);
+                        },
+                      ),
+                    ),
+                  ),
+              ],
             ),
           ),
-
-          
-            // feedback popup at bottom
-          if (_feedback != null)
-            Positioned(
-              bottom: 20,
-              left: 20,
-              right: 20,
-              child: AnimatedOpacity(
-                opacity: _feedback != null ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 300),
-                child: Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 20, vertical: 14),
-                  decoration: BoxDecoration(
-                    color: _isSuccess
-                        ? Colors.green.shade100
-                        : Colors.orange.shade100,
-                    borderRadius: BorderRadius.circular(16),
-                    border: Border.all(
-                      color: _isSuccess
-                          ? Colors.green.shade300
-                          : Colors.orange.shade300,
-                    ),
-                  ),
-                  child: Text(
-                    _feedback!,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w500,
-                      color: _isSuccess
-                          ? Colors.green.shade800
-                          : Colors.orange.shade800,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-
-          // star burst animation on success
-          if (_isSuccess && _showStars)
-            Positioned.fill(
-              child: IgnorePointer(
-                child: StarBurstWidget(
-                  onComplete: () {
-                    setState(() => _showStars = false);
-                  },
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -522,11 +656,14 @@ class CanvasPainter extends CustomPainter {
   final List<Offset> templatePoints;
   final Size canvasSize;
 
+   final bool tracingMode;
+
   CanvasPainter({
     required this.strokes,
     required this.currentStroke,
     required this.templatePoints,
     required this.canvasSize,
+    this.tracingMode = false,
   });
 
   final Paint _strokePaint = Paint()
@@ -559,7 +696,14 @@ class CanvasPainter extends CustomPainter {
     final scaled = templatePoints
         .map((p) => Offset(offsetX + p.dx * minDim, offsetY + p.dy * minDim))
         .toList();
-    _drawStroke(canvas, scaled, _templatePaint);
+    final paint = Paint()
+      ..color = tracingMode
+          ? Colors.orange.withOpacity(0.4)
+          : Colors.blue.withOpacity(0.2)
+      ..strokeWidth = tracingMode ? 36.0 : 28.0
+      ..strokeCap = StrokeCap.round
+      ..style = PaintingStyle.stroke;
+    _drawStroke(canvas, scaled, paint);
   }
 
   void _drawGuides(Canvas canvas, Size size) {
@@ -678,4 +822,109 @@ class _Star {
     required this.delay,
     required this.color,
   });
+}
+
+// ── Session Summary Screen ────────────────────────────────────────
+class SessionSummaryScreen extends StatelessWidget {
+  final Map<String, double> results;
+  final List<String> letters;
+
+  const SessionSummaryScreen({
+    super.key,
+    required this.results,
+    required this.letters,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.white,
+      appBar: AppBar(title: const Text('Session complete!')),
+      body: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '🎉 Great session!',
+              style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Here\'s how you did:',
+              style: TextStyle(fontSize: 16, color: Colors.grey),
+            ),
+            const SizedBox(height: 32),
+            ...letters.map((letter) {
+              final score = results[letter] ?? 1.0;
+              final percent = ((1 - score) * 100).clamp(0, 100).toStringAsFixed(0);
+              final color = score < 0.28
+                  ? Colors.green
+                  : score < 0.45
+                      ? Colors.orange
+                      : Colors.red;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Letter $letter',
+                          style: const TextStyle(
+                              fontSize: 18, fontWeight: FontWeight.w600),
+                        ),
+                        Text(
+                          '$percent%',
+                          style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                              color: color),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(8),
+                      child: LinearProgressIndicator(
+                        value: double.parse(percent) / 100,
+                        backgroundColor: Colors.grey.shade200,
+                        color: color,
+                        minHeight: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }),
+            const Spacer(),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.deepPurple,
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+                onPressed: () {
+                  Navigator.pushReplacement(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => const PracticeCanvas()),
+                  );
+                },
+                child: const Text(
+                  'Start new session',
+                  style: TextStyle(fontSize: 18, color: Colors.white),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
