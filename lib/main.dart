@@ -33,7 +33,7 @@ class LetterTemplates {
     final points = <Offset>[];
     for (int i = 0; i <= 60; i++) {
       final angle = (i / 60) * 2 * pi;
-      points.add(Offset(0.5 + 0.3 * cos(angle), 0.5 + 0.3 * sin(angle)));
+      points.add(Offset(0.5 + 0.2 * cos(angle), 0.5 + 0.3 * sin(angle)));
     }
     return points;
   }
@@ -41,10 +41,10 @@ class LetterTemplates {
   static List<Offset> _generateL() {
     final points = <Offset>[];
     for (int i = 0; i <= 30; i++) {
-      points.add(Offset(0.38, 0.15 + i * (0.60 / 30)));
+      points.add(Offset(0.4, 0.25 + i * (0.40 / 30)));
     }
     for (int i = 0; i <= 20; i++) {
-      points.add(Offset(0.38 + i * (0.24 / 20), 0.75));
+      points.add(Offset(0.4 + i * (0.18 / 20), 0.65));
     }
     return points;
   }
@@ -53,7 +53,7 @@ class LetterTemplates {
     final points = <Offset>[];
     for (int i = 0; i <= 50; i++) {
       final angle = (pi * 0.25) + (i / 50) * (pi * 1.5);
-      points.add(Offset(0.5 + 0.3 * cos(angle), 0.5 + 0.3 * sin(angle)));
+      points.add(Offset(0.5 + 0.2 * cos(angle), 0.5 + 0.3 * sin(angle)));
     }
     return points;
   }
@@ -61,21 +61,16 @@ class LetterTemplates {
 
 // ── DTW Algorithm ─────────────────────────────────────────────────
 class DTW {
-  // resample a stroke to exactly n evenly spaced points
   static List<Offset> resample(List<Offset> points, int n) {
     if (points.length < 2) return points;
-
-    // calculate total path length
     double totalLength = 0;
     for (int i = 1; i < points.length; i++) {
       totalLength += (points[i] - points[i - 1]).distance;
     }
-
     final interval = totalLength / (n - 1);
     final resampled = <Offset>[points.first];
     double accumulated = 0;
     int i = 1;
-
     while (resampled.length < n && i < points.length) {
       final d = (points[i] - points[i - 1]).distance;
       if (accumulated + d >= interval) {
@@ -93,138 +88,8 @@ class DTW {
         i++;
       }
     }
-
-    while (resampled.length < n) {
-      resampled.add(points.last);
-    }
-
+    while (resampled.length < n) resampled.add(points.last);
     return resampled;
-  }
-
-  // normalise points to start at origin and fit unit bounding box
-  static List<Offset> normalise(List<Offset> points) {
-    if (points.isEmpty) return points;
-
-    // translate to origin
-    final minX = points.map((p) => p.dx).reduce(min);
-    final minY = points.map((p) => p.dy).reduce(min);
-    final translated = points.map((p) => Offset(p.dx - minX, p.dy - minY)).toList();
-
-    // scale to unit box
-    final maxX = translated.map((p) => p.dx).reduce(max);
-    final maxY = translated.map((p) => p.dy).reduce(max);
-    final scale = max(maxX, maxY);
-    if (scale == 0) return translated;
-
-    return translated.map((p) => Offset(p.dx / scale, p.dy / scale)).toList();
-  }
-
-  // compute DTW distance between two equal-length point sequences
-  static double compute(List<Offset> a, List<Offset> b) {
-    final n = a.length;
-    final matrix = List.generate(n, (_) => List.filled(n, double.infinity));
-    matrix[0][0] = (a[0] - b[0]).distance;
-
-    for (int i = 1; i < n; i++) {
-      matrix[i][0] = matrix[i - 1][0] + (a[i] - b[0]).distance;
-    }
-    for (int j = 1; j < n; j++) {
-      matrix[0][j] = matrix[0][j - 1] + (a[0] - b[j]).distance;
-    }
-    for (int i = 1; i < n; i++) {
-      for (int j = 1; j < n; j++) {
-        final cost = (a[i] - b[j]).distance;
-        matrix[i][j] = cost +
-            [matrix[i - 1][j], matrix[i][j - 1], matrix[i - 1][j - 1]]
-                .reduce(min);
-      }
-    }
-
-    return matrix[n - 1][n - 1] / n;
-  }
-
-  // returns score 0-1 and which segment had most error
-static Map<String, dynamic> analyse(
-      List<Offset> userStroke, List<Offset> templateStroke) {
-    const n = 32;
-
-    final userResampled = resample(userStroke, n);
-    var templateResampled = resample(templateStroke, n);
-
-    // for circular strokes (O, C) rotate template to match user start point
-    templateResampled = _alignStartPoint(userResampled, templateResampled);
-
-    final userLength = pathLength(userStroke);
-    final templateLength = pathLength(templateStroke);
-
-    // position aware score
-    double positionCost = 0;
-    for (int i = 0; i < n; i++) {
-      positionCost += (userResampled[i] - templateResampled[i]).distance;
-    }
-    final positionScore = (positionCost / (n * templateLength * 0.8)).clamp(0.0, 1.0);
-
-    // shape score
-    final userNorm = normalise(userResampled);
-    final templateNorm = normalise(templateResampled);
-    final rawShape = compute(userNorm, templateNorm);
-    final shapeScore = (rawShape / 2.0).clamp(0.0, 1.0);
-
-    // for circular letters rely more on shape, less on position
-    // position matters more for L which has a fixed start
-    final score = (positionScore * 0.3 + shapeScore * 0.7);
-
-    
-    final coverageRatio = userLength / templateLength;
-
-    final third = n ~/ 3;
-    double startCost = 0, midCost = 0, endCost = 0;
-    for (int i = 0; i < third; i++) {
-      startCost += (userNorm[i] - templateNorm[i]).distance;
-    }
-    for (int i = third; i < third * 2; i++) {
-      midCost += (userNorm[i] - templateNorm[i]).distance;
-    }
-    for (int i = third * 2; i < n; i++) {
-      endCost += (userNorm[i] - templateNorm[i]).distance;
-    }
-
-    String segment = 'middle';
-    if (startCost >= midCost && startCost >= endCost) segment = 'start';
-    if (endCost >= midCost && endCost >= startCost) segment = 'end';
-    if (coverageRatio < 0.3) segment = 'incomplete';
-
-    return {
-      'score': score,
-      'segment': segment,
-      'coverage': coverageRatio,
-      'positionScore': positionScore,
-      'shapeScore': shapeScore,
-    };
-  }
-
-  // rotate template points so the closest point to user's start becomes index 0
- static List<Offset> _alignStartPoint(
-      List<Offset> user, List<Offset> template) {
-    final userNorm = normalise(user);
-    double minCost = double.infinity;
-    int bestIndex = 0;
-
-    for (int i = 0; i < template.length; i++) {
-      final rotated = [...template.sublist(i), ...template.sublist(0, i)];
-      final rotatedNorm = normalise(rotated);
-      double cost = 0;
-      for (int j = 0; j < template.length; j++) {
-        cost += (userNorm[j] - rotatedNorm[j]).distance;
-      }
-      if (cost < minCost) {
-        minCost = cost;
-        bestIndex = i;
-      }
-    }
-
-    if (bestIndex == 0) return template;
-    return [...template.sublist(bestIndex), ...template.sublist(0, bestIndex)];
   }
 
   static double pathLength(List<Offset> points) {
@@ -235,22 +100,118 @@ static Map<String, dynamic> analyse(
     return length;
   }
 
-  static String getTip(String segment, String letter, double coverage) {
-    if (coverage < 0.3) {
-      return 'Keep going — trace the full letter shape';
+  // core check — what % of user points are within tolerance of template
+  static double proximityScore(
+      List<Offset> userStroke, List<Offset> templateStroke, double tolerance) {
+    if (userStroke.isEmpty) return 0;
+    int onPath = 0;
+    for (final point in userStroke) {
+      // find closest template point
+      double minDist = double.infinity;
+      for (final tp in templateStroke) {
+        final d = (point - tp).distance;
+        if (d < minDist) minDist = d;
+      }
+      if (minDist <= tolerance) onPath++;
     }
-    if (letter == 'O' || letter == 'C') {
-      return 'Try to stay on the blue guide as you go around';
+    return onPath / userStroke.length;
+  }
+
+  // coverage — what % of template is covered by user stroke
+  static double templateCoverage(
+      List<Offset> userStroke, List<Offset> templateStroke, double tolerance) {
+    if (templateStroke.isEmpty) return 0;
+    int covered = 0;
+    for (final tp in templateStroke) {
+      for (final point in userStroke) {
+        if ((point - tp).distance <= tolerance) {
+          covered++;
+          break;
+        }
+      }
     }
+    return covered / templateStroke.length;
+  }
+
+  static Map<String, dynamic> analyse(
+      List<Offset> userStroke, List<Offset> templateStroke) {
+    const n = 64;
+    final userResampled = resample(userStroke, n);
+    final templateResampled = resample(templateStroke, n);
+
+    // tolerance = half the template stroke width on screen (~14px)
+    final tolerance = pathLength(templateResampled) * 0.12;
+
+    // what % of user points are on the template path
+    final onPath = proximityScore(userResampled, templateResampled, tolerance);
+
+    // what % of template is covered by user
+    final coverage = templateCoverage(userResampled, templateResampled, tolerance);
+
+    // score = combination of both
+    // onPath catches squiggles outside (they won't be on path)
+    // coverage catches incomplete strokes (half L won't cover template)
+    final score = (onPath * 0.5 + coverage * 0.5);
+
+    // segment detection — which third has least coverage
+    final third = templateResampled.length ~/ 3;
+    double startCov = 0, midCov = 0, endCov = 0;
+    for (int i = 0; i < third; i++) {
+      for (final p in userResampled) {
+        if ((p - templateResampled[i]).distance <= tolerance) {
+          startCov++;
+          break;
+        }
+      }
+    }
+    for (int i = third; i < third * 2; i++) {
+      for (final p in userResampled) {
+        if ((p - templateResampled[i]).distance <= tolerance) {
+          midCov++;
+          break;
+        }
+      }
+    }
+    for (int i = third * 2; i < templateResampled.length; i++) {
+      for (final p in userResampled) {
+        if ((p - templateResampled[i]).distance <= tolerance) {
+          endCov++;
+          break;
+        }
+      }
+    }
+
+    String segment = 'middle';
+    if (startCov <= midCov && startCov <= endCov) segment = 'start';
+    if (endCov <= midCov && endCov <= startCov) segment = 'end';
+
+    return {
+      'score': score,
+      'onPath': onPath,
+      'coverage': coverage,
+      'segment': segment,
+    };
+  }
+
+  static List<Offset> normalise(List<Offset> points) {
+    if (points.isEmpty) return points;
+    final minX = points.map((p) => p.dx).reduce(min);
+    final minY = points.map((p) => p.dy).reduce(min);
+    final translated = points.map((p) => Offset(p.dx - minX, p.dy - minY)).toList();
+    final maxX = translated.map((p) => p.dx).reduce(max);
+    final maxY = translated.map((p) => p.dy).reduce(max);
+    final scale = max(maxX, maxY);
+    if (scale == 0) return translated;
+    return translated.map((p) => Offset(p.dx / scale, p.dy / scale)).toList();
+  }
+
+  static String getTip(String segment, String letter, double coverage, bool tracingMode) {
+    if (tracingMode) return 'Follow the orange guide';
+    if (coverage < 0.4) return 'Keep going — trace the full letter';
     switch (segment) {
-      case 'start':
-        return 'Start right on the blue guide letter';
-      case 'end':
-        return 'Follow the blue guide all the way to the end';
-      case 'middle':
-        return 'Stay on the blue guide through the whole letter';
-      default:
-        return 'Try tracing right on the blue letter';
+      case 'start': return 'Try starting right on the letter';
+      case 'end': return 'Follow the guide all the way to the end';
+      default: return 'Stay on the blue guide through the middle';
     }
   }
 }
@@ -262,6 +223,9 @@ class PracticeCanvas extends StatefulWidget {
   @override
   State<PracticeCanvas> createState() => _PracticeCanvasState();
 }
+
+
+
 
 class _PracticeCanvasState extends State<PracticeCanvas> {
   final List<List<Offset>> _strokes = [];
@@ -286,6 +250,10 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
   // session results — letter -> best score
   final Map<String, double> _sessionResults = {};
 
+  double _difficultyMultiplier = 1.0; // starts normal, adjusts over time
+  int _tracingSecondsLeft = 60;
+  bool _showTracingChoice = false;
+
   void _onPanStart(DragStartDetails details) {
     setState(() {
       _currentStroke = [details.localPosition];
@@ -309,6 +277,10 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
       _currentStroke = [];
     });
     _analyseStroke();
+    // auto clear strokes after analysis so canvas stays clean
+    Future.delayed(const Duration(milliseconds: 800), () {
+      if (mounted) setState(() => _strokes.clear());
+    });
   }
 
   void _analyseStroke() {
@@ -336,7 +308,52 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
         _isSuccess = false;
         _lastScore = 0;
       });
-      Future.delayed(const Duration(seconds: 3), () {
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        if (mounted) setState(() => _feedback = null);
+      });
+      return;
+    }
+
+    // check if stroke is near the template at all
+    final strokeCenterX = (xs.reduce(max) + xs.reduce(min)) / 2;
+    final strokeCenterY = (ys.reduce(max) + ys.reduce(min)) / 2;
+    final templateCenterX = scaledTemplate.map((p) => p.dx).reduce((a, b) => a + b) / scaledTemplate.length;
+    final templateCenterY = scaledTemplate.map((p) => p.dy).reduce((a, b) => a + b) / scaledTemplate.length;
+    final distFromTemplate = sqrt(
+      pow(strokeCenterX - templateCenterX, 2) +
+      pow(strokeCenterY - templateCenterY, 2)
+    );
+
+    if (distFromTemplate > minDim * 0.35) {
+      setState(() {
+        _feedback = 'Draw on the letter — stay on the guide';
+        _isSuccess = false;
+        _lastScore = 0;
+      });
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _feedback = null);
+      });
+      return;
+    }
+
+    // size check — user stroke must be similar size to template
+    final userWidth = xs.reduce(max) - xs.reduce(min);
+    final userHeight = ys.reduce(max) - ys.reduce(min);
+    final templateXs = scaledTemplate.map((p) => p.dx).toList();
+    final templateYs = scaledTemplate.map((p) => p.dy).toList();
+    final templateWidth = templateXs.reduce(max) - templateXs.reduce(min);
+    final templateHeight = templateYs.reduce(max) - templateYs.reduce(min);
+    
+    final widthRatio = userWidth / templateWidth;
+    final heightRatio = userHeight / templateHeight;
+
+    if (widthRatio < 0.4 || heightRatio < 0.4) {
+      setState(() {
+        _feedback = 'Draw bigger — try to fill the whole blue letter';
+        _isSuccess = false;
+        _lastScore = 0;
+      });
+      Future.delayed(const Duration(seconds: 2), () {
         if (mounted) setState(() => _feedback = null);
       });
       return;
@@ -364,52 +381,63 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
 
     print('position: ${result['positionScore']}, shape: ${result['shapeScore']}, coverage: $coverage, segment: $segment');
 
+    
+
+    // update best score for this letter
     _attemptCount++;
 
     // update best score for this letter
-    final prev = _sessionResults[_currentLetter] ?? 1.0;
-    _sessionResults[_currentLetter] = min(prev, score);
+     final prev = _sessionResults[_currentLetter] ?? 0.0;
+    _sessionResults[_currentLetter] = max(prev, score);
 
-    if (score < 0.28) {
-      print('MOCK BLE: sending H3 (success)');
+    // dynamic difficulty adjustment
+    if (score >= 0.65 / _difficultyMultiplier) {
+      _difficultyMultiplier = (_difficultyMultiplier + 0.05).clamp(0.8, 1.3);
+    } else {
+      _difficultyMultiplier = (_difficultyMultiplier - 0.05).clamp(0.8, 1.3);
+    }
+
+    // score is now 0-1 where 1 = perfect, 0 = completely wrong
+    // flip multiplier logic too
+    final threshold = 0.72 / _difficultyMultiplier;
+
+    if (score >= threshold) {
+      print('MOCK BLE: sending H3 (success) — onPath: ${result['onPath']}, coverage: ${result['coverage']}');
       setState(() {
         _lastScore = score;
         _isSuccess = true;
         _showStars = true;
-        _feedback = score < 0.15 ? '⭐ Perfect! Great job!' : '👍 Good job! Keep practising!';
+        _feedback = score > 0.85 ? '⭐ Perfect! Great job!' : '👍 Good job! Keep practising!';
         _failCount = 0;
       });
-      // move to next letter after 2 seconds
       Future.delayed(const Duration(seconds: 2), () {
         if (mounted) _nextLetter();
       });
     } else {
       _failCount++;
-      if (score < 0.35) {
-        print('MOCK BLE: sending H1 (minor correction)');
+      if (score >= 0.4) {
+        print('MOCK BLE: sending H1 (minor)');
       } else {
         print('MOCK BLE: sending H2 (major error)');
       }
 
-      // after 3 fails drop to tracing mode
       if (_failCount >= 3 && !_tracingMode) {
         setState(() {
           _tracingMode = true;
-          _feedback = 'No worries — just trace over the blue letter';
+          _feedback = 'No worries — just trace over the orange letter';
           _isSuccess = false;
           _lastScore = score;
         });
+        _startTracingTimer();
       } else {
         setState(() {
           _lastScore = score;
           _isSuccess = false;
-          _feedback = _tracingMode
-              ? 'Keep tracing — follow the blue guide'
-              : DTW.getTip(segment, _currentLetter, coverage);
+          _feedback = DTW.getTip(segment, _currentLetter, coverage, _tracingMode);
         });
       }
 
-      Future.delayed(const Duration(seconds: 3), () {
+      Future.delayed(const Duration(milliseconds: 1500), () {
         if (mounted) setState(() => _feedback = null);
       });
     }
@@ -451,6 +479,20 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
       _isSuccess = false;
       _showStars = false;
       _lastScore = -1;
+    });
+  }
+
+  void _startTracingTimer() {
+    _tracingSecondsLeft = 60;
+    Future.doWhile(() async {
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted || !_tracingMode) return false;
+      setState(() => _tracingSecondsLeft--);
+      if (_tracingSecondsLeft <= 0) {
+        setState(() => _showTracingChoice = true);
+        return false;
+      }
+      return true;
     });
   }
 
@@ -567,7 +609,7 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
                     child: Text(
                       _lastScore < 0
                           ? 'Score: —'
-                          : 'Score: ${(100 - _lastScore * 100).toStringAsFixed(0)}%',
+                          : 'Score: ${(_lastScore * 100).toStringAsFixed(0)}%',
                       style: const TextStyle(fontSize: 14),
                     ),
                   ),
@@ -640,6 +682,64 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
                       ),
                     ),
                   ),
+
+                if (_showTracingChoice)
+                  Positioned.fill(
+                    child: Container(
+                      color: Colors.black.withOpacity(0.5),
+                      child: Center(
+                        child: Container(
+                          margin: const EdgeInsets.all(32),
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(16),
+                          ),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Text(
+                                'Good effort! What would you like to do?',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                              ),
+                              const SizedBox(height: 24),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.orange,
+                                  minimumSize: const Size(double.infinity, 48),
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _showTracingChoice = false;
+                                    _tracingSecondsLeft = 60;
+                                  });
+                                  _startTracingTimer();
+                                },
+                                child: const Text('Keep tracing', style: TextStyle(color: Colors.white)),
+                              ),
+                              const SizedBox(height: 12),
+                              ElevatedButton(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.deepPurple,
+                                  minimumSize: const Size(double.infinity, 48),
+                                ),
+                                onPressed: () {
+                                  setState(() {
+                                    _showTracingChoice = false;
+                                    _tracingMode = false;
+                                    _failCount = 0;
+                                    _strokes.clear();
+                                  });
+                                },
+                                child: const Text('Try on my own', style: TextStyle(color: Colors.white)),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),  
               ],
             ),
           ),
@@ -672,11 +772,11 @@ class CanvasPainter extends CustomPainter {
     ..strokeCap = StrokeCap.round
     ..style = PaintingStyle.stroke;
 
-  final Paint _templatePaint = Paint()
-    ..color = Colors.blue.withOpacity(0.2)
-    ..strokeWidth = 28.0
-    ..strokeCap = StrokeCap.round
-    ..style = PaintingStyle.stroke;
+  // final Paint _templatePaint = Paint()
+  //   ..color = Colors.blue.withOpacity(0.2)
+  //   ..strokeWidth = 28.0
+  //   ..strokeCap = StrokeCap.round
+  //   ..style = PaintingStyle.stroke;
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -857,10 +957,10 @@ class SessionSummaryScreen extends StatelessWidget {
             const SizedBox(height: 32),
             ...letters.map((letter) {
               final score = results[letter] ?? 1.0;
-              final percent = ((1 - score) * 100).clamp(0, 100).toStringAsFixed(0);
-              final color = score < 0.28
+              final percent = (score * 100).clamp(0, 100).toStringAsFixed(0);
+              final color = score > 0.72
                   ? Colors.green
-                  : score < 0.45
+                  : score > 0.5
                       ? Colors.orange
                       : Colors.red;
               return Padding(
