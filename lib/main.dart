@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'dart:math';
+import 'package:path_drawing/path_drawing.dart';
 
 void main() {
+  LetterTemplates.init();
   runApp(const SmartPenApp());
 }
 
@@ -23,39 +25,108 @@ class SmartPenApp extends StatelessWidget {
 
 // ── Letter Templates ──────────────────────────────────────────────
 class LetterTemplates {
-  static Map<String, List<Offset>> templates = {
-    'O': _generateO(),
-    'L': _generateL(),
-    'C': _generateC(),
-  };
-
-  static List<Offset> _generateO() {
+  // convert SVG path string to list of Offset points
+  static List<Offset> _svgToPoints(String svgPath, {int samples = 64}) {
+    final path = parseSvgPathData(svgPath);
+    final metrics = path.computeMetrics();
     final points = <Offset>[];
-    for (int i = 0; i <= 60; i++) {
-      final angle = (i / 60) * 2 * pi;
-      points.add(Offset(0.5 + 0.2 * cos(angle), 0.5 + 0.3 * sin(angle)));
+    for (final metric in metrics) {
+      final length = metric.length;
+      for (int i = 0; i <= samples; i++) {
+        final t = i / samples;
+        final tangent = metric.getTangentForOffset(t * length);
+        if (tangent != null) {
+          points.add(tangent.position);
+        }
+      }
     }
     return points;
   }
 
-  static List<Offset> _generateL() {
-    final points = <Offset>[];
-    for (int i = 0; i <= 30; i++) {
-      points.add(Offset(0.4, 0.25 + i * (0.40 / 30)));
-    }
-    for (int i = 0; i <= 20; i++) {
-      points.add(Offset(0.4 + i * (0.18 / 20), 0.65));
-    }
-    return points;
+  // normalise SVG points to 0-1 range
+  static List<Offset> _normaliseToUnit(List<Offset> points) {
+    if (points.isEmpty) return points;
+    final minX = points.map((p) => p.dx).reduce(min);
+    final minY = points.map((p) => p.dy).reduce(min);
+    final maxX = points.map((p) => p.dx).reduce(max);
+    final maxY = points.map((p) => p.dy).reduce(max);
+    final w = maxX - minX;
+    final h = maxY - minY;
+    final scale = max(w, h);
+    if (scale == 0) return points;
+    return points
+        .map((p) => Offset((p.dx - minX) / scale, (p.dy - minY) / scale))
+        .toList();
   }
 
-  static List<Offset> _generateC() {
-    final points = <Offset>[];
-    for (int i = 0; i <= 50; i++) {
-      final angle = (pi * 0.25) + (i / 50) * (pi * 1.5);
-      points.add(Offset(0.5 + 0.2 * cos(angle), 0.5 + 0.3 * sin(angle)));
-    }
-    return points;
+  static List<Offset> _make(String svgPath) =>
+      _normaliseToUnit(_svgToPoints(svgPath));
+
+  static late Map<String, List<Offset>> templates;
+
+  static void init() {
+    templates = {
+      // Uppercase
+      'A': _make('M 0 100 L 50 0 L 100 100 M 15 65 L 85 65'),
+      'B': _make('M 0 0 L 0 100 M 0 0 Q 70 0 70 25 Q 70 50 0 50 Q 70 50 70 75 Q 70 100 0 100'),
+      'C': _make('M 90 15 Q 50 -10 10 30 Q -15 55 10 80 Q 35 105 90 85'),
+      'D': _make('M 0 0 L 0 100 Q 100 100 100 50 Q 100 0 0 0'),
+      'E': _make('M 80 0 L 0 0 L 0 100 L 80 100 M 0 50 L 60 50'),
+      'F': _make('M 80 0 L 0 0 L 0 100 M 0 50 L 60 50'),
+      'G': _make('M 90 15 Q 50 -10 10 30 Q -15 55 10 80 Q 35 105 90 85 L 90 50 L 55 50'),
+      'H': _make('M 0 0 L 0 100 M 100 0 L 100 100 M 0 50 L 100 50'),
+      'I': _make('M 20 0 L 80 0 M 50 0 L 50 100 M 20 100 L 80 100'),
+      'J': _make('M 20 0 L 80 0 M 60 0 L 60 80 Q 60 100 40 100 Q 20 100 20 80'),
+      'K': _make('M 0 0 L 0 100 M 80 0 L 0 50 L 80 100'),
+      'L': _make('M 0 0 L 0 100 L 70 100'),
+      'M': _make('M 0 100 L 0 0 L 50 60 L 100 0 L 100 100'),
+      'N': _make('M 0 100 L 0 0 L 100 100 L 100 0'),
+      'O': _make('M 50 0 Q 100 0 100 50 Q 100 100 50 100 Q 0 100 0 50 Q 0 0 50 0'),
+      'P': _make('M 0 0 L 0 100 M 0 0 Q 70 0 70 25 Q 70 50 0 50'),
+      'Q': _make('M 50 0 Q 100 0 100 50 Q 100 100 50 100 Q 0 100 0 50 Q 0 0 50 0 M 65 65 L 95 95'),
+      'R': _make('M 0 0 L 0 100 M 0 0 Q 70 0 70 25 Q 70 50 0 50 L 70 100'),
+      'S': _make('M 90 10 Q 50 -15 10 20 Q -15 45 50 50 Q 110 55 90 80 Q 70 105 10 90'),
+      'T': _make('M 0 0 L 100 0 M 50 0 L 50 100'),
+      'U': _make('M 0 0 L 0 70 Q 0 100 50 100 Q 100 100 100 70 L 100 0'),
+      'V': _make('M 0 0 L 50 100 L 100 0'),
+      'W': _make('M 0 0 L 25 100 L 50 40 L 75 100 L 100 0'),
+      'X': _make('M 0 0 L 100 100 M 100 0 L 0 100'),
+      'Y': _make('M 0 0 L 50 50 L 100 0 M 50 50 L 50 100'),
+      'Z': _make('M 0 0 L 100 0 L 0 100 L 100 100'),
+
+      // Lowercase
+      'a': _make('M 70 30 Q 70 0 40 0 Q 10 0 10 30 Q 10 60 40 60 Q 70 60 70 30 L 70 80'),
+      'b': _make('M 0 0 L 0 80 Q 0 100 30 100 Q 60 100 60 70 Q 60 40 30 40 Q 10 40 0 50'),
+      'c': _make('M 60 10 Q 30 -10 10 20 Q -10 45 10 70 Q 30 95 60 75'),
+      'd': _make('M 60 0 L 60 80 Q 60 100 30 100 Q 0 100 0 70 Q 0 40 30 40 Q 50 40 60 50'),
+      'e': _make('M 5 50 L 65 50 Q 65 20 40 10 Q 15 0 5 25 Q -5 50 10 75 Q 30 100 65 80'),
+      'f': _make('M 70 5 Q 50 -5 40 10 L 40 100 M 20 40 L 60 40'),
+      'g': _make('M 70 30 Q 70 0 40 0 Q 10 0 10 30 Q 10 60 40 60 Q 70 60 70 30 L 70 90 Q 70 110 40 110 Q 20 110 10 95'),
+      'h': _make('M 0 0 L 0 100 M 0 45 Q 0 20 30 20 Q 60 20 60 45 L 60 100'),
+      'i': _make('M 40 30 L 40 100 M 40 10 L 40 15'),
+      'j': _make('M 50 30 L 50 90 Q 50 110 30 110 Q 10 110 10 90 M 50 10 L 50 15'),
+      'k': _make('M 0 0 L 0 100 M 55 20 L 0 60 L 60 100'),
+      'l': _make('M 40 0 L 40 90 Q 40 100 50 100'),
+      'm': _make('M 0 40 L 0 100 M 0 45 Q 0 20 25 20 Q 45 20 45 45 L 45 100 M 45 45 Q 45 20 70 20 Q 90 20 90 45 L 90 100'),
+      'n': _make('M 0 40 L 0 100 M 0 45 Q 0 20 30 20 Q 60 20 60 45 L 60 100'),
+      'o': _make('M 35 20 Q 65 20 65 50 Q 65 80 35 80 Q 5 80 5 50 Q 5 20 35 20'),
+      'p': _make('M 0 30 L 0 110 M 0 50 Q 0 20 30 20 Q 60 20 60 50 Q 60 80 30 80 Q 10 80 0 65'),
+      'q': _make('M 60 30 L 60 110 M 60 50 Q 60 20 30 20 Q 0 20 0 50 Q 0 80 30 80 Q 50 80 60 65'),
+      'r': _make('M 0 40 L 0 100 M 0 50 Q 10 20 50 25'),
+      's': _make('M 60 25 Q 40 10 20 20 Q 0 30 5 50 Q 10 65 40 65 Q 65 65 65 80 Q 65 100 35 100 Q 15 100 5 85'),
+      't': _make('M 40 5 L 40 90 Q 40 100 55 100 M 15 30 L 65 30'),
+      'u': _make('M 0 20 L 0 70 Q 0 100 30 100 Q 60 100 60 70 L 60 20'),
+      'v': _make('M 0 20 L 35 100 L 70 20'),
+      'w': _make('M 0 20 L 20 100 L 40 50 L 60 100 L 80 20'),
+      'x': _make('M 0 20 L 70 100 M 70 20 L 0 100'),
+      'y': _make('M 0 20 L 35 70 L 70 20 M 35 70 L 20 110 Q 10 130 -5 120'),
+      'z': _make('M 0 20 L 70 20 L 0 100 L 70 100'),
+
+      // Sentence mode — "the cat sat"
+      'sentence_the': _make('M 30 0 L 30 100 M 0 30 L 60 30'),
+      'sentence_cat': _make('M 60 10 Q 30 -10 10 20 Q -10 45 10 70 Q 30 95 60 75'),
+      'sentence_sat': _make('M 60 25 Q 40 10 20 20 Q 0 30 5 50 Q 10 65 40 65 Q 65 65 65 80 Q 65 100 35 100'),
+    };
   }
 }
 
@@ -232,7 +303,12 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
   List<Offset> _currentStroke = [];
   
   // session config
-  final List<String> _sessionLetters = ['O', 'C', 'L'];
+  final List<String> _sessionLetters = [
+    'A','B','C','D','E','F','G','H','I','J','K','L','M',
+    'N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
+    'a','b','c','d','e','f','g','h','i','j','k','l','m',
+    'n','o','p','q','r','s','t','u','v','w','x','y','z',
+  ];
   int _currentLetterIndex = 0;
   String get _currentLetter => _sessionLetters[_currentLetterIndex];
 
