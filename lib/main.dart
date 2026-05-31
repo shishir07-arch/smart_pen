@@ -28,12 +28,23 @@ class LetterTemplates {
   // convert SVG path string to list of Offset points
   static List<Offset> _svgToPoints(String svgPath, {int samples = 64}) {
     final path = parseSvgPathData(svgPath);
-    final metrics = path.computeMetrics();
+    final metrics = path.computeMetrics(forceClosed: false);
     final points = <Offset>[];
+    bool firstMetric = true;
     for (final metric in metrics) {
+      if (!firstMetric) {
+        // add a gap marker by duplicating last point
+        // this breaks visual connection between subpaths
+        if (points.isNotEmpty) {
+          points.add(points.last);
+          points.add(points.last);
+        }
+      }
+      firstMetric = false;
       final length = metric.length;
-      for (int i = 0; i <= samples; i++) {
-        final t = i / samples;
+      final count = samples;
+      for (int i = 0; i <= count; i++) {
+        final t = i / count;
         final tangent = metric.getTangentForOffset(t * length);
         if (tangent != null) {
           points.add(tangent.position);
@@ -67,23 +78,23 @@ class LetterTemplates {
   static void init() {
     templates = {
       // Uppercase
-      'A': _make('M 0 100 L 50 0 L 100 100 M 15 65 L 85 65'),
+      'A': _make('M 0 100 L 50 0 L 100 100 M 25 60 L 75 60'),
       'B': _make('M 0 0 L 0 100 M 0 0 Q 70 0 70 25 Q 70 50 0 50 Q 70 50 70 75 Q 70 100 0 100'),
       'C': _make('M 90 15 Q 50 -10 10 30 Q -15 55 10 80 Q 35 105 90 85'),
       'D': _make('M 0 0 L 0 100 Q 100 100 100 50 Q 100 0 0 0'),
-      'E': _make('M 80 0 L 0 0 L 0 100 L 80 100 M 0 50 L 60 50'),
+      'E': _make('M 80 0 L 0 0 L 0 100 L 80 100 M 0 50 L 55 50'),
       'F': _make('M 80 0 L 0 0 L 0 100 M 0 50 L 60 50'),
       'G': _make('M 90 15 Q 50 -10 10 30 Q -15 55 10 80 Q 35 105 90 85 L 90 50 L 55 50'),
       'H': _make('M 0 0 L 0 100 M 100 0 L 100 100 M 0 50 L 100 50'),
       'I': _make('M 20 0 L 80 0 M 50 0 L 50 100 M 20 100 L 80 100'),
       'J': _make('M 20 0 L 80 0 M 60 0 L 60 80 Q 60 100 40 100 Q 20 100 20 80'),
-      'K': _make('M 0 0 L 0 100 M 80 0 L 0 50 L 80 100'),
+      'K': _make('M 0 0 L 0 100 M 0 50 L 80 0 M 0 50 L 80 100'),
       'L': _make('M 0 0 L 0 100 L 70 100'),
       'M': _make('M 0 100 L 0 0 L 50 60 L 100 0 L 100 100'),
       'N': _make('M 0 100 L 0 0 L 100 100 L 100 0'),
       'O': _make('M 50 0 Q 100 0 100 50 Q 100 100 50 100 Q 0 100 0 50 Q 0 0 50 0'),
       'P': _make('M 0 0 L 0 100 M 0 0 Q 70 0 70 25 Q 70 50 0 50'),
-      'Q': _make('M 50 0 Q 100 0 100 50 Q 100 100 50 100 Q 0 100 0 50 Q 0 0 50 0 M 65 65 L 95 95'),
+      'Q': _make('M 50 0 Q 100 0 100 50 Q 100 100 50 100 Q 0 100 0 50 Q 0 0 50 0 M 60 60 L 90 90'),
       'R': _make('M 0 0 L 0 100 M 0 0 Q 70 0 70 25 Q 70 50 0 50 L 70 100'),
       'S': _make('M 90 10 Q 50 -15 10 20 Q -15 45 50 50 Q 110 55 90 80 Q 70 105 10 90'),
       'T': _make('M 0 0 L 100 0 M 50 0 L 50 100'),
@@ -316,6 +327,7 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
   int _attemptCount = 0;
   int _failCount = 0;
   bool _tracingMode = false;
+  bool _browseMode = true; // set to false for actual session
 
   // feedback
   String? _feedback;
@@ -520,6 +532,19 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
   }
 
   void _nextLetter() {
+    if (_browseMode) {
+      setState(() {
+        _strokes.clear();
+        _feedback = null;
+        _isSuccess = false;
+        _showStars = false;
+        _lastScore = -1;
+        _attemptCount = 0;
+        _failCount = 0;
+        _tracingMode = false;
+      });
+      return;
+    } // don't auto advance in browse mode
     if (_currentLetterIndex >= _sessionLetters.length - 1) {
       // session complete — go to summary
       Navigator.pushReplacement(
@@ -593,38 +618,53 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
         children: [
           // letter progress bar
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Row(
-              children: _sessionLetters.asMap().entries.map((entry) {
-                final i = entry.key;
-                final letter = entry.value;
-                final isDone = i < _currentLetterIndex;
-                final isCurrent = i == _currentLetterIndex;
-                return Expanded(
-                  child: Container(
-                    margin: const EdgeInsets.symmetric(horizontal: 4),
-                    padding: const EdgeInsets.symmetric(vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isDone
-                          ? Colors.green.shade300
-                          : isCurrent
-                              ? Colors.deepPurple.shade200
-                              : Colors.grey.shade200,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      letter,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        color: isDone || isCurrent
-                            ? Colors.white
-                            : Colors.grey.shade600,
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: _sessionLetters.asMap().entries.map((entry) {
+                  final i = entry.key;
+                  final letter = entry.value;
+                  final isDone = i < _currentLetterIndex;
+                  final isCurrent = i == _currentLetterIndex;
+                  return GestureDetector(
+                    onTap: () {
+                      setState(() {
+                        _currentLetterIndex = i;
+                        _strokes.clear();
+                        _feedback = null;
+                        _isSuccess = false;
+                        _showStars = false;
+                        _lastScore = -1;
+                        _attemptCount = 0;
+                        _failCount = 0;
+                        _tracingMode = false;
+                      });
+                    },
+                    child: Container(
+                      margin: const EdgeInsets.symmetric(horizontal: 3),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: isDone
+                            ? Colors.green.shade300
+                            : isCurrent
+                                ? Colors.deepPurple.shade200
+                                : Colors.grey.shade200,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        letter,
+                        style: TextStyle(
+                          fontWeight: FontWeight.bold,
+                          color: isDone || isCurrent
+                              ? Colors.white
+                              : Colors.grey.shade600,
+                        ),
                       ),
                     ),
-                  ),
-                );
-              }).toList(),
+                  );
+                }).toList(),
+              ),
             ),
           ),
 
@@ -866,7 +906,7 @@ class CanvasPainter extends CustomPainter {
 
   void _drawTemplate(Canvas canvas, Size size) {
     if (templatePoints.isEmpty) return;
-    final minDim = min(size.width, size.height);
+    final minDim = min(size.width, size.height) * 0.5;
     final offsetX = (size.width - minDim) / 2;
     final offsetY = (size.height - minDim) / 2;
     final scaled = templatePoints
@@ -899,7 +939,14 @@ class CanvasPainter extends CustomPainter {
     final path = Path();
     path.moveTo(points.first.dx, points.first.dy);
     for (int i = 1; i < points.length; i++) {
-      path.lineTo(points[i].dx, points[i].dy);
+      // if two consecutive identical points = pen lift, move without drawing
+      if (points[i] == points[i - 1]) {
+        if (i + 1 < points.length) {
+          path.moveTo(points[i + 1].dx, points[i + 1].dy);
+        }
+      } else {
+        path.lineTo(points[i].dx, points[i].dy);
+      }
     }
     canvas.drawPath(path, paint);
   }
