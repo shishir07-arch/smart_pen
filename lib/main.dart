@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:math';
 import 'package:path_drawing/path_drawing.dart';
+import 'package:smart_pen/home_screen.dart';
+import 'home_screen.dart';
 
 void main() {
   LetterTemplates.init();
@@ -18,7 +20,7 @@ class SmartPenApp extends StatelessWidget {
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
-      home: const PracticeCanvas(),
+      home: HomeScreen(),
     );
   }
 }
@@ -300,7 +302,14 @@ class DTW {
 
 // ── Practice Canvas ───────────────────────────────────────────────
 class PracticeCanvas extends StatefulWidget {
-  const PracticeCanvas({super.key});
+  final List<String> sessionLetters;
+  final String mode;
+  
+  const PracticeCanvas({
+    super.key,
+    required this.sessionLetters,
+    required this.mode,
+  });
 
   @override
   State<PracticeCanvas> createState() => _PracticeCanvasState();
@@ -312,14 +321,16 @@ class PracticeCanvas extends StatefulWidget {
 class _PracticeCanvasState extends State<PracticeCanvas> {
   final List<List<Offset>> _strokes = [];
   List<Offset> _currentStroke = [];
+  final List<List<Offset>> _currentLetterStrokes = [];
   
   // session config
-  final List<String> _sessionLetters = [
-    'A','B','C','D','E','F','G','H','I','J','K','L','M',
-    'N','O','P','Q','R','S','T','U','V','W','X','Y','Z',
-    'a','b','c','d','e','f','g','h','i','j','k','l','m',
-    'n','o','p','q','r','s','t','u','v','w','x','y','z',
-  ];
+  late List<String> _sessionLetters;
+
+  @override
+  void initState() {
+    super.initState();
+    _sessionLetters = widget.sessionLetters;
+  }
   int _currentLetterIndex = 0;
   String get _currentLetter => _sessionLetters[_currentLetterIndex];
 
@@ -355,23 +366,38 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
     });
   }
 
-  void _onPanEnd(DragEndDetails details) {
+void _onPanEnd(DragEndDetails details) {
     if (_currentStroke.length < 20) {
       setState(() => _currentStroke = []);
       return;
     }
     setState(() {
       _strokes.add(List.from(_currentStroke));
+      _currentLetterStrokes.add(List.from(_currentStroke));
       _currentStroke = [];
     });
-    _analyseStroke();
-    // auto clear strokes after analysis so canvas stays clean
+
+    // wait 800ms — if no new stroke starts, analyse the whole letter
+    Future.delayed(const Duration(milliseconds: 800), () {
+      if (mounted && _currentStroke.isEmpty) {
+        _analyseFullLetter();
+      }
+    });
+
+    // auto clear ink after 800ms too
     Future.delayed(const Duration(milliseconds: 800), () {
       if (mounted) setState(() => _strokes.clear());
     });
   }
 
-  void _analyseStroke() {
+  void _analyseFullLetter() {
+     if (_currentLetterStrokes.isEmpty) return;
+    
+    // flatten all strokes into one combined point list
+    final combinedStroke = _currentLetterStrokes.expand((s) => s).toList();
+    
+
+
     final template = LetterTemplates.templates[_currentLetter];
     if (template == null) return;
 
@@ -384,8 +410,8 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
         .toList();
 
     // bounding box check
-    final xs = _strokes.last.map((p) => p.dx).toList();
-    final ys = _strokes.last.map((p) => p.dy).toList();
+    final xs = combinedStroke.map((p) => p.dx).toList();
+    final ys = combinedStroke.map((p) => p.dy).toList();
     final bWidth = xs.reduce(max) - xs.reduce(min);
     final bHeight = ys.reduce(max) - ys.reduce(min);
     final minDimension = minDim * 0.15;
@@ -448,7 +474,7 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
     }
 
     // minimum stroke length check
-    final userLength = DTW.pathLength(_strokes.last);
+    final userLength = DTW.pathLength(combinedStroke);
     final templateLength = DTW.pathLength(scaledTemplate);
     if (userLength < templateLength * 0.15) {
       setState(() {
@@ -462,7 +488,7 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
       return;
     }
 
-    final result = DTW.analyse(_strokes.last, scaledTemplate);
+    final result = DTW.analyse(combinedStroke, scaledTemplate);
     final score = result['score'] as double;
     final segment = result['segment'] as String;
     final coverage = result['coverage'] as double;
@@ -529,6 +555,7 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
         if (mounted) setState(() => _feedback = null);
       });
     }
+    _currentLetterStrokes.clear();
   }
 
   void _nextLetter() {
@@ -581,6 +608,7 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
       _showStars = false;
       _lastScore = -1;
     });
+    _currentLetterStrokes.clear();
   }
 
   void _startTracingTimer() {
@@ -1136,7 +1164,7 @@ class SessionSummaryScreen extends StatelessWidget {
                   Navigator.pushReplacement(
                     context,
                     MaterialPageRoute(
-                        builder: (_) => const PracticeCanvas()),
+                        builder: (_) =>  HomeScreen()),
                   );
                 },
                 child: const Text(
