@@ -3,6 +3,10 @@ import 'dart:math';
 import 'package:path_drawing/path_drawing.dart';
 import 'package:smart_pen/home_screen.dart';
 import 'home_screen.dart';
+import 'ble_service.dart';
+import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 
 void main() {
   LetterTemplates.init();
@@ -330,7 +334,21 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
   void initState() {
     super.initState();
     _sessionLetters = widget.sessionLetters;
+    _connectBle();
   }
+
+  void _connectBle() async {
+    await Permission.bluetoothScan.request();
+    await Permission.bluetoothConnect.request();
+    await Permission.location.request();
+    
+   
+    final connected = await _bleService.connect();
+    if (mounted) {
+      setState(() => _bleConnected = connected);
+    }
+  }
+
   int _currentLetterIndex = 0;
   String get _currentLetter => _sessionLetters[_currentLetterIndex];
 
@@ -339,6 +357,9 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
   int _failCount = 0;
   bool _tracingMode = false;
   bool _browseMode = true; // set to false for actual session
+
+  final BleService _bleService = BleService();
+  bool _bleConnected = false;
 
   // feedback
   String? _feedback;
@@ -516,7 +537,7 @@ void _onPanEnd(DragEndDetails details) {
     final threshold = 0.72 / _difficultyMultiplier;
 
     if (score >= threshold) {
-      print('MOCK BLE: sending H3 (success) — onPath: ${result['onPath']}, coverage: ${result['coverage']}');
+      _bleService.sendCommand('H3');
       setState(() {
         _lastScore = score;
         _isSuccess = true;
@@ -530,9 +551,9 @@ void _onPanEnd(DragEndDetails details) {
     } else {
       _failCount++;
       if (score >= 0.4) {
-        print('MOCK BLE: sending H1 (minor)');
+        _bleService.sendCommand('H1');
       } else {
-        print('MOCK BLE: sending H2 (major error)');
+        _bleService.sendCommand('H2');
       }
 
       if (_failCount >= 3 && !_tracingMode) {
@@ -755,6 +776,37 @@ void _onPanEnd(DragEndDetails details) {
                           ? 'Score: —'
                           : 'Score: ${(_lastScore * 100).toStringAsFixed(0)}%',
                       style: const TextStyle(fontSize: 14),
+                    ),
+                  ),
+                ),
+
+
+                // BLE connection dot
+                Positioned(
+                  top: 10,
+                  left: 60,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Row(
+                      children: [
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: _bleConnected ? Colors.green : Colors.red,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Text(
+                          _bleConnected ? 'Pen connected' : 'Pen disconnected',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ],
                     ),
                   ),
                 ),
