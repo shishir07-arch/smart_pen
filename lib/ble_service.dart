@@ -21,18 +21,21 @@ class BleService {
         return false;
       }
 
-      // start scanning
-      await FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+      // scan and connect in one step
+      FlutterBluePlus.startScan(timeout: const Duration(seconds: 15));
 
-      // listen for scan results
       await for (final results in FlutterBluePlus.scanResults) {
         for (final result in results) {
+          print('Found device: ${result.device.platformName}');
           if (result.device.platformName == deviceName) {
             await FlutterBluePlus.stopScan();
             _device = result.device;
 
-            // connect to device
-            await _device!.connect(timeout: const Duration(seconds: 10));
+            // connect immediately while device is fresh in scan
+            await _device!.connect(
+              timeout: const Duration(seconds: 15),
+              autoConnect: false,
+            );
             print('Connected to SmartPen');
 
             // discover services
@@ -65,7 +68,7 @@ class BleService {
       return;
     }
     try {
-      await _characteristic!.write(command.codeUnits, withoutResponse: true);
+      await _characteristic!.write(command.codeUnits, withoutResponse: false);
       print('BLE sent: $command');
     } catch (e) {
       print('BLE send error: $e');

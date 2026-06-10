@@ -341,12 +341,18 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
     await Permission.bluetoothScan.request();
     await Permission.bluetoothConnect.request();
     await Permission.location.request();
-    
-   
-    final connected = await _bleService.connect();
-    if (mounted) {
-      setState(() => _bleConnected = connected);
+
+    // retry connection up to 3 times
+    for (int i = 0; i < 3; i++) {
+      print('BLE connection attempt ${i + 1}');
+      final connected = await _bleService.connect();
+      if (connected) {
+        if (mounted) setState(() => _bleConnected = true);
+        return;
+      }
+      await Future.delayed(const Duration(seconds: 2));
     }
+    if (mounted) setState(() => _bleConnected = false);
   }
 
   int _currentLetterIndex = 0;
