@@ -362,7 +362,7 @@ class _PracticeCanvasState extends State<PracticeCanvas> {
   int _attemptCount = 0;
   int _failCount = 0;
   bool _tracingMode = false;
-  bool _browseMode = true; // set to false for actual session
+  bool _browseMode = false; // set to false for actual session
 
   final BleService _bleService = BleService();
   bool _bleConnected = false;
@@ -405,7 +405,7 @@ void _onPanEnd(DragEndDetails details) {
     });
 
     // wait 800ms — if no new stroke starts, analyse the whole letter
-    Future.delayed(const Duration(milliseconds: 800), () {
+    Future.delayed(const Duration(milliseconds: 1500), () {
       if (mounted && _currentStroke.isEmpty) {
         _analyseFullLetter();
       }
@@ -500,6 +500,27 @@ void _onPanEnd(DragEndDetails details) {
       return;
     }
 
+    // shape ratio check — user stroke shape must roughly match template shape
+    final templateAspect = templateWidth / (templateHeight + 0.001);
+    final userAspect = userWidth / (userHeight + 0.001);
+    final aspectDiff = (templateAspect - userAspect).abs();
+
+    print('templateAspect: $templateAspect, userAspect: $userAspect, diff: $aspectDiff');
+
+    if (aspectDiff > 0.3) {
+      setState(() {
+        _feedback = 'Try drawing the letter shape — not a circle!';
+        _isSuccess = false;
+        _lastScore = 0;
+      });
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _feedback = null);
+      });
+      return;
+    }
+
+    
+
     // minimum stroke length check
     final userLength = DTW.pathLength(combinedStroke);
     final templateLength = DTW.pathLength(scaledTemplate);
@@ -516,10 +537,25 @@ void _onPanEnd(DragEndDetails details) {
     }
 
     final result = DTW.analyse(combinedStroke, scaledTemplate);
+    print('result keys: ${result.keys.toList()}');
     final score = result['score'] as double;
     final segment = result['segment'] as String;
     final coverage = result['coverage'] as double;
 
+
+    final onPath = result['onPath'] as double;
+    print('onPath value: $onPath');
+    if (onPath < 0.45) {
+      setState(() {
+        _feedback = 'Draw on the letter — follow the blue guide';
+        _isSuccess = false;
+        _lastScore = onPath;
+      });
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) setState(() => _feedback = null);
+      });
+      return;
+    }
     print('position: ${result['positionScore']}, shape: ${result['shapeScore']}, coverage: $coverage, segment: $segment');
 
     
@@ -540,7 +576,7 @@ void _onPanEnd(DragEndDetails details) {
 
     // score is now 0-1 where 1 = perfect, 0 = completely wrong
     // flip multiplier logic too
-    final threshold = 0.72 / _difficultyMultiplier;
+    final threshold = 0.88 / _difficultyMultiplier;
 
     if (score >= threshold) {
       _bleService.sendCommand('H3');
